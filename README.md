@@ -87,16 +87,18 @@ Selamat, Worker Anda sudah aktif!
 
 ## 🌐 Pengaturan Domain Wildcard (Wajib untuk Fitur Kamuflase)
 
-Fitur ini memungkinkan Anda menggunakan subdomain apa pun sebagai *kamuflase* untuk lalu lintas Anda.
+Fitur ini memungkinkan Anda menggunakan subdomain apa pun sebagai *kamuflase* untuk lalu lintas Anda. Daripada menggunakan DNS CNAME, kita akan menggunakan Rute Pekerja (*Worker Route*) yang lebih efisien.
 
-1.  Masuk ke pengaturan **DNS** domain Anda di Cloudflare.
-2.  Klik **Add record**.
-3.  Buat record **CNAME** baru dengan pengaturan berikut:
-    *   **Type:** `CNAME`
-    *   **Name:** `*` (ini artinya wildcard atau semua subdomain)
-    *   **Target:** Isi dengan domain worker Anda (misalnya, `vless.domain-anda.com` atau `nama-worker.akun-anda.workers.dev`).
-    *   **Proxy status:** Pastikan ikon awan oranye **Aktif** (Proxied).
-4.  Klik **Save**.
+1.  Buka Worker Anda di dasbor Cloudflare.
+2.  Masuk ke tab **Triggers**.
+3.  Di bawah bagian **Routes**, klik **Add route**.
+4.  Masukkan rute dengan format berikut, ganti `<domain_worker_anda>` dengan domain yang Anda gunakan:
+    *   `*.<domain_worker_anda>/*`
+5.  Pastikan **Worker** yang benar telah dipilih.
+6.  Klik **Add route**.
+
+**Contoh:**
+Jika `baseDomain` Anda diatur ke `vless.domain-anda.com`, maka rute yang harus Anda tambahkan adalah `*.vless.domain-anda.com/*`. Ini akan mengarahkan semua lalu lintas dari subdomain apa pun di bawah `vless.domain-anda.com` ke Worker Anda.
 
 ## 📋 Cara Menggunakan URL Langganan
 
