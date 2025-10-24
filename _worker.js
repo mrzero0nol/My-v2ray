@@ -12,8 +12,9 @@ const config = {
     // PENTING: Sesuaikan dengan domain worker Anda untuk fitur wildcard.
     baseDomain: "sazkiaatas.eu.org",
 
-    // Ganti dengan nama KV Namespace yang Anda buat di dasbor Cloudflare.
-    kvNamespace: "ganti-dengan-nama-kv-anda",
+    // Ganti dengan NAMA BINDING KV Anda (bukan nama namespace).
+    // Ikuti panduan di README.
+    kvNamespace: "KV",
 
     // Opsi Internal (biasanya tidak perlu diubah)
     dnsServer: "8.8.8.8",
@@ -25,7 +26,6 @@ const config = {
 };
 // ----------------- CONFIGURATION END -----------------
 
-let APP_DOMAIN = "";
 let prxIP = "";
 
 const WS_READY_STATE_OPEN = 1;
@@ -34,13 +34,22 @@ const WS_READY_STATE_CLOSING = 2;
 // Memuat daftar proksi, dengan cache KV
 async function loadProxyList(env) {
     const kv = env[config.kvNamespace];
+    // Periksa apakah binding KV ada.
     if (!kv) {
-        console.error(`KV Namespace "${config.kvNamespace}" not bound. Pastikan nama sudah benar dan sudah di-bind di Settings > Variables.`);
-        // Fallback jika KV tidak tersedia, langsung fetch.
-        const response = await fetch(config.proxyListUrl);
-        if (!response.ok) return [];
-        const text = await response.text();
-        return text.split('\n').filter(Boolean);
+        console.error(`KV Namespace binding "${config.kvNamespace}" not found. Pastikan nama binding di Settings > Variables sudah benar dan sesuai dengan 'kvNamespace' di konfigurasi.`);
+        // Fallback: jika KV tidak tersedia, langsung fetch dari URL.
+        try {
+            const response = await fetch(config.proxyListUrl);
+            if (!response.ok) {
+                console.error("Fallback failed: Could not fetch proxy list from URL.");
+                return [];
+            }
+            const text = await response.text();
+            return text.split('\n').filter(Boolean);
+        } catch (e) {
+            console.error("Fallback failed with error:", e);
+            return [];
+        }
     }
 
     let proxyListText = await kv.get('proxyListCache');
@@ -65,7 +74,6 @@ export default {
     async fetch(request, env) {
         try {
             const url = new URL(request.url);
-            APP_DOMAIN = url.hostname;
 
             if (request.headers.get("Upgrade") === "websocket") {
                 return await handleWebSocket(request, env);
@@ -76,7 +84,7 @@ export default {
             }
 
             // Semua path lain akan menampilkan halaman info.
-            return getInfoPage();
+            return getInfoPage(url);
 
         } catch (error) {
             return new Response(`Error: ${error.message}`, {
@@ -96,7 +104,7 @@ async function handleWebSocket(request, env) {
 
     const proxyLines = await loadProxyList(env);
     if (proxyLines.length === 0) {
-        return new Response("No proxy available", { status: 503 });
+        return new Response("No proxy available. Check configuration and upstream proxy list.", { status: 503 });
     }
 
     if (path.length > 1 && !prxMatch) {
@@ -200,7 +208,7 @@ async function handleTCP(remoteSocket, address, port, data, webSocket) {
         );
     } catch (error) {
         console.log(`TCP error: ${error.message}`);
-        throw error;
+        safeCloseWebSocket(webSocket);
     }
 }
 
@@ -247,7 +255,8 @@ function safeCloseWebSocket(socket) {
 // Handle endpoint subskripsi
 async function handleSubscription(request, env) {
     const url = new URL(request.url);
-    const reqPassword = url.pathname.slice(5); // Menghapus '/sub/'
+    const pathParts = url.pathname.slice(1).split('/'); // -> ['sub', 'password']
+    const reqPassword = pathParts[1] || '';
 
     if (reqPassword !== config.password) {
         return new Response('Unauthorized: Invalid password', { status: 403 });
@@ -281,9 +290,6 @@ async function handleSubscription(request, env) {
     let sniAndHost = requestHost;
 
     // **IMPLEMENTASI LOGIKA WILDCARD SUBDOMAIN**
-    // Jika baseDomain diatur dan requestHost adalah subdomain dari baseDomain,
-    // maka gunakan bagian subdomain sebagai host/SNI.
-    // Contoh: 'speedtest.mydomain.com' akan menjadi 'speedtest.com'
     if (config.baseDomain && requestHost.endsWith(`.${config.baseDomain}`) && requestHost !== config.baseDomain) {
         const subdomainPart = requestHost.substring(0, requestHost.length - config.baseDomain.length - 1);
         // Heuristik sederhana: jika subdomain tidak mengandung titik, tambahkan '.com'
@@ -323,7 +329,13 @@ async function handleSubscription(request, env) {
 }
 
 // Halaman Informasi
-function getInfoPage() {
+function getInfoPage(url) {
+    const workerDomain = url.hostname;
+    // Tampilkan placeholder jika password belum diganti
+    const password = (config.password === 'ganti-dengan-password-anda' || !config.password)
+      ? '{password}'
+      : config.password;
+
     return new Response(`<!DOCTYPE html>
 <html>
 <head>
@@ -335,7 +347,7 @@ function getInfoPage() {
   <div class="container">
     <h1>🚀 V2Ray Proxy Gateway</h1>
     <p>Worker Anda sedang berjalan. Gunakan link subskripsi yang benar untuk mendapatkan konfigurasi.</p>
-    <code>https://{worker_domain}/sub/{password}?country=US</code>
+    <code>https://${workerDomain}/sub/${password}?country=US</code>
   </div>
 </body>
 </html>`, {

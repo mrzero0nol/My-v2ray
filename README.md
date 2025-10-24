@@ -2,7 +2,7 @@
 
 Selamat datang! Proyek ini adalah skrip Cloudflare Worker yang dirancang untuk menjadi gateway langganan (subscription) V2Ray. Skrip ini secara otomatis mengambil daftar server VLESS dari sebuah file, mengolahnya, dan menyajikannya dalam format yang bisa langsung digunakan oleh aplikasi V2Ray Anda.
 
-Fitur utamanya termasuk dukungan untuk domain wildcard (untuk menyamarkan lalu lintas) dan pengambilan proksi acak atau berdasarkan negara.
+Fitur utamanya termasuk dukungan untuk domain wildcard (untuk menyamarkan lalu lintas), caching menggunakan KV, dan pengambilan proksi acak atau berdasarkan negara.
 
 ## 🚀 Cara Pemasangan (Deploy)
 
@@ -28,21 +28,21 @@ Pemasangan skrip ini sangat mudah karena semuanya ada dalam satu file. Cukup iku
 Di bagian paling atas kode yang baru Anda tempel, Anda akan menemukan blok `config`. Ini adalah **satu-satunya bagian** yang perlu Anda ubah.
 
 ```javascript
-//----------------- CONFIGURATION START -----------------
+// ----------------- CONFIGURATION START -----------------
 const config = {
     // URL daftar proksi Anda. Ganti jika perlu.
     proxyListUrl: 'https://raw.githubusercontent.com/sazkiaatas/My-v2ray/main/proxyList.txt',
 
-    // Ganti dengan kata sandi rahasia Anda.
+    // Ganti dengan kata sandi rahasia untuk link subskripsi Anda.
     password: 'ganti-dengan-password-anda',
 
     // PENTING: Sesuaikan dengan domain worker Anda untuk fitur wildcard.
     baseDomain: "domain-worker-anda.com",
 
-    // Ganti dengan nama KV Namespace yang Anda buat di Cloudflare.
-    kvNamespace: "ganti-dengan-nama-kv-anda"
+    // Ganti dengan NAMA BINDING KV Anda.
+    kvNamespace: "KV"
 };
-//----------------- CONFIGURATION END -----------------
+// ----------------- CONFIGURATION END -----------------
 ```
 
 Berikut penjelasan untuk setiap item:
@@ -63,21 +63,20 @@ Berikut penjelasan untuk setiap item:
 
 *   `kvNamespace`:
     *   **Untuk Apa?** Worker ini menggunakan penyimpanan KV (Key-Value) dari Cloudflare untuk menyimpan sementara (cache) daftar proksi. Ini membuat Worker lebih cepat dan efisien.
-    *   **Tindakan:** Anda harus membuat sebuah "KV Namespace" di Cloudflare dan memberinya nama yang **sama persis** dengan yang tertulis di sini. Lihat panduan di bawah.
+    *   **Tindakan:** Anda harus membuat sebuah "KV Namespace" di Cloudflare dan kemudian **mengikatnya** ke Worker ini. Nama yang Anda tulis di sini harus **sama persis** dengan "Variable name" pada saat binding. Lihat panduan di bawah.
 
-### Langkah 4: Siapkan Penyimpanan KV (KV Namespace)
+### Langkah 4: Siapkan dan Ikat Penyimpanan KV (KV Namespace)
 
 1.  Kembali ke dasbor Cloudflare.
 2.  Di menu samping, buka **Workers & Pages** -> **KV**.
 3.  Klik **Create a namespace**.
-4.  Masukkan nama yang **sama persis** seperti yang Anda tulis di `config.kvNamespace`.
-5.  Klik **Add**.
-6.  Sekarang, hubungkan KV ini ke Worker Anda:
+4.  Beri nama (misalnya, `V2RAY_PROXIES`), lalu klik **Add**.
+5.  Sekarang, hubungkan KV ini ke Worker Anda:
     *   Buka kembali Worker Anda.
     *   Masuk ke tab **Settings** -> **Variables**.
     *   Gulir ke bawah ke bagian **KV Namespace Bindings** dan klik **Add binding**.
-    *   **Variable name:** Isi dengan nama yang sama lagi (contoh: `nama-kv-anda`).
-    *   **KV namespace:** Pilih KV yang baru saja Anda buat dari daftar.
+    *   **Variable name:** Isi dengan nama yang Anda tulis di `config.kvNamespace` (contoh: `KV`). Ini adalah **nama binding**.
+    *   **KV namespace:** Pilih KV yang baru saja Anda buat dari daftar (contoh: `V2RAY_PROXIES`).
     *   Klik **Save**.
 
 ### Langkah 5: Simpan dan Deploy
