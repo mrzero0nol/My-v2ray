@@ -6,14 +6,14 @@ const config = {
     // URL file mentah (raw) dari daftar proksi Anda di GitHub.
     proxyListUrl: 'https://raw.githubusercontent.com/sazkiaatas/My-v2ray/main/proxyList.txt',
 
-    // Kata sandi rahasia untuk mengakses link langganan.
-    password: 'sazkia',
+    // Ganti dengan kata sandi rahasia Anda.
+    password: 'ganti-dengan-password-anda',
 
-    // Domain dasar worker Anda untuk fitur wildcard.
+    // PENTING: Sesuaikan dengan domain worker Anda untuk fitur wildcard.
     baseDomain: "sazkiaatas.eu.org",
 
-    // Nama KV Namespace yang Anda buat di dasbor Cloudflare.
-    kvNamespace: "sazkiaatas",
+    // Ganti dengan nama KV Namespace yang Anda buat di dasbor Cloudflare.
+    kvNamespace: "ganti-dengan-nama-kv-anda",
 
     // Opsi Internal (biasanya tidak perlu diubah)
     dnsServer: "8.8.8.8",
@@ -35,8 +35,8 @@ const WS_READY_STATE_CLOSING = 2;
 async function loadProxyList(env) {
     const kv = env[config.kvNamespace];
     if (!kv) {
-        console.error(`KV Namespace "${config.kvNamespace}" not bound.`);
-        // Fallback to fetch directly if KV is not available
+        console.error(`KV Namespace "${config.kvNamespace}" not bound. Pastikan nama sudah benar dan sudah di-bind di Settings > Variables.`);
+        // Fallback jika KV tidak tersedia, langsung fetch.
         const response = await fetch(config.proxyListUrl);
         if (!response.ok) return [];
         const text = await response.text();
@@ -52,6 +52,7 @@ async function loadProxyList(env) {
             return [];
         }
         proxyListText = await response.text();
+        // Simpan ke cache KV selama 1 jam (3600 detik)
         await kv.put('proxyListCache', proxyListText, { expirationTtl: 3600 });
     } else {
         console.log("Cache hit. Using proxy list from KV.");
@@ -60,47 +61,30 @@ async function loadProxyList(env) {
     return proxyListText.split('\n').filter(Boolean);
 }
 
-// Fungsi ini tidak lagi digunakan, daftar negara diambil dari file proxy utama.
-async function loadKVProxyList(url) {
-    // Deprecated
-    return {};
-}
-
 export default {
     async fetch(request, env) {
         try {
             const url = new URL(request.url);
             APP_DOMAIN = url.hostname;
 
-            const upgradeHeader = request.headers.get("Upgrade");
-
-            if (upgradeHeader === "websocket") {
+            if (request.headers.get("Upgrade") === "websocket") {
                 return await handleWebSocket(request, env);
             }
 
-            if (url.pathname === "/") {
-                return getInfoPage();
+            if (url.pathname.startsWith("/sub")) {
+                return await handleSubscription(request, env);
             }
 
-            const pathSegments = url.pathname.slice(1).split('/');
-            if (pathSegments[0] === 'sub') {
-                return await handleSubscription(request, env, pathSegments[1]);
-            }
+            // Semua path lain akan menampilkan halaman info.
+            return getInfoPage();
 
-            if (url.pathname.startsWith("/api")) {
-                return await handleAPI(request, env);
-            }
-      
-      // Default: return info
-      return getInfoPage();
-      
-    } catch (error) {
-      return new Response(`Error: ${error.message}`, {
-        status: 500,
-        headers: { "Content-Type": "text/plain" }
-      });
+        } catch (error) {
+            return new Response(`Error: ${error.message}`, {
+                status: 500,
+                headers: { "Content-Type": "text/plain" }
+            });
+        }
     }
-  }
 };
 
 // Handle WebSocket connection
@@ -115,8 +99,8 @@ async function handleWebSocket(request, env) {
         return new Response("No proxy available", { status: 503 });
     }
 
-    if (path.length === 3 || path.includes(",")) {
-        // Country code mode: /ID or /ID,US
+    if (path.length > 1 && !prxMatch) {
+        // Mode negara: /ID atau /ID,US
         const requestedCountries = path.replace("/", "").toUpperCase().split(",");
         const availableProxies = proxyLines.filter(line => {
             const parts = line.split(',');
@@ -131,43 +115,28 @@ async function handleWebSocket(request, env) {
             return new Response("Country not found or no proxies for this country", { status: 404 });
         }
     } else if (prxMatch) {
-        // Direct IP:PORT mode
+        // Mode IP:PORT langsung
         prxIP = prxMatch[1];
     } else {
-        // Auto mode: pick a random proxy
+        // Mode acak: pilih proxy random
         const randomProxyLine = proxyLines[Math.floor(Math.random() * proxyLines.length)];
         const parts = randomProxyLine.split(',');
         prxIP = `${parts[0].trim()}-${parts[1].trim()}`;
     }
 
-    // Create WebSocket pair
     const webSocketPair = new WebSocketPair();
     const [client, webSocket] = Object.values(webSocketPair);
 
     webSocket.accept();
 
-    // Handle WebSocket messages
-    let addressLog = "";
-    let portLog = "";
-
-    const log = (info) => {
-        console.log(`[${addressLog}:${portLog}] ${info}`);
-    };
-
-    // Process WebSocket stream
     const earlyDataHeader = request.headers.get("sec-websocket-protocol") || "";
-    const readableStream = makeReadableWebSocketStream(webSocket, earlyDataHeader, log);
+    const readableStream = makeReadableWebSocketStream(webSocket, earlyDataHeader);
 
     let remoteSocketWrapper = { value: null };
-    let isDNS = false;
 
     readableStream.pipeTo(
         new WritableStream({
             async write(chunk) {
-                if (isDNS) {
-                    return await handleUDP(config.dnsServer, config.dnsPort, chunk, webSocket, log);
-                }
-
                 if (remoteSocketWrapper.value) {
                     const writer = remoteSocketWrapper.value.writable.getWriter();
                     await writer.write(chunk);
@@ -176,25 +145,23 @@ async function handleWebSocket(request, env) {
                 }
 
                 const [prxHost, prxPort] = prxIP.split(/[:=-]/);
-
                 await handleTCP(
                     remoteSocketWrapper,
                     prxHost,
                     prxPort || "443",
                     chunk,
-                    webSocket,
-                    log
+                    webSocket
                 );
             },
             close() {
-                log("Stream closed");
+                console.log("Stream closed");
             },
             abort(reason) {
-                log(`Stream aborted: ${reason}`);
+                console.log(`Stream aborted: ${reason}`);
             }
         })
     ).catch(err => {
-        log(`Stream error: ${err.message}`);
+        console.log(`Stream error: ${err.message}`);
     });
 
     return new Response(null, {
@@ -203,8 +170,8 @@ async function handleWebSocket(request, env) {
     });
 }
 
-// TCP connection handler
-async function handleTCP(remoteSocket, address, port, data, webSocket, log) {
+// Handler koneksi TCP
+async function handleTCP(remoteSocket, address, port, data, webSocket) {
     try {
         const tcpSocket = connect({
             hostname: address,
@@ -212,8 +179,6 @@ async function handleTCP(remoteSocket, address, port, data, webSocket, log) {
         });
 
         remoteSocket.value = tcpSocket;
-        log(`Connected to ${address}:${port}`);
-
         const writer = tcpSocket.writable.getWriter();
         await writer.write(data);
         writer.releaseLock();
@@ -226,107 +191,52 @@ async function handleTCP(remoteSocket, address, port, data, webSocket, log) {
                     }
                 },
                 close() {
-                    log("TCP connection closed");
                     safeCloseWebSocket(webSocket);
                 },
                 abort(reason) {
-                    log(`TCP aborted: ${reason}`);
+                     console.log(`TCP aborted: ${reason}`);
                 }
             })
         );
     } catch (error) {
-        log(`TCP error: ${error.message}`);
+        console.log(`TCP error: ${error.message}`);
         throw error;
     }
 }
 
-// UDP connection handler
-async function handleUDP(address, port, data, webSocket, log) {
-    try {
-        const tcpSocket = connect({
-            hostname: config.udpRelay.host,
-            port: config.udpRelay.port
-        });
-
-        const header = `udp:${address}:${port}`;
-        const headerBuffer = new TextEncoder().encode(header);
-        const separator = new Uint8Array([0x7c]);
-        const relayMessage = new Uint8Array(
-            headerBuffer.length + separator.length + data.byteLength
-        );
-
-        relayMessage.set(headerBuffer, 0);
-        relayMessage.set(separator, headerBuffer.length);
-        relayMessage.set(new Uint8Array(data), headerBuffer.length + separator.length);
-
-        const writer = tcpSocket.writable.getWriter();
-        await writer.write(relayMessage);
-        writer.releaseLock();
-
-        await tcpSocket.readable.pipeTo(
-            new WritableStream({
-                async write(chunk) {
-                    if (webSocket.readyState === WS_READY_STATE_OPEN) {
-                        webSocket.send(chunk);
-                    }
-                }
-            })
-        );
-    } catch (error) {
-        log(`UDP error: ${error.message}`);
-    }
-}
-
-// Make readable stream from WebSocket
-function makeReadableWebSocketStream(webSocket, earlyDataHeader, log) {
+// Membuat stream yang bisa dibaca dari WebSocket
+function makeReadableWebSocketStream(webSocket, earlyDataHeader) {
     let readableStreamCancel = false;
-
     return new ReadableStream({
         start(controller) {
             webSocket.addEventListener("message", (event) => {
                 if (readableStreamCancel) return;
                 controller.enqueue(event.data);
             });
-
             webSocket.addEventListener("close", () => {
                 safeCloseWebSocket(webSocket);
-                if (!readableStreamCancel) {
-                    controller.close();
-                }
+                if (!readableStreamCancel) controller.close();
             });
-
-            webSocket.addEventListener("error", (err) => {
-                log("WebSocket error");
-                controller.error(err);
-            });
-
+            webSocket.addEventListener("error", (err) => controller.error(err));
             if (earlyDataHeader) {
                 try {
                     const decoded = atob(earlyDataHeader.replace(/-/g, "+").replace(/_/g, "/"));
-                    const buffer = Uint8Array.from(decoded, c => c.charCodeAt(0));
-                    controller.enqueue(buffer.buffer);
-                } catch (error) {
-                    // Ignore
-                }
+                    controller.enqueue(Uint8Array.from(decoded, c => c.charCodeAt(0)).buffer);
+                } catch (error) { /* Ignore */ }
             }
         },
-
         pull() {},
-
-        cancel(reason) {
-            if (readableStreamCancel) return;
-            log(`Stream canceled: ${reason}`);
+        cancel() {
             readableStreamCancel = true;
             safeCloseWebSocket(webSocket);
         }
     });
 }
 
-// Safe close WebSocket
+// Menutup WebSocket dengan aman
 function safeCloseWebSocket(socket) {
     try {
-        if (socket.readyState === WS_READY_STATE_OPEN ||
-            socket.readyState === WS_READY_STATE_CLOSING) {
+        if (socket.readyState === WS_READY_STATE_OPEN || socket.readyState === WS_READY_STATE_CLOSING) {
             socket.close();
         }
     } catch (error) {
@@ -334,13 +244,15 @@ function safeCloseWebSocket(socket) {
     }
 }
 
-// Handle subscription endpoint
-async function handleSubscription(request, env, reqPassword) {
+// Handle endpoint subskripsi
+async function handleSubscription(request, env) {
+    const url = new URL(request.url);
+    const reqPassword = url.pathname.slice(5); // Menghapus '/sub/'
+
     if (reqPassword !== config.password) {
         return new Response('Unauthorized: Invalid password', { status: 403 });
     }
 
-    const url = new URL(request.url);
     const countryParam = url.searchParams.get('country')?.toUpperCase();
     const limit = parseInt(url.searchParams.get("limit")) || 50;
     const format = url.searchParams.get("format") || "base64";
@@ -366,11 +278,16 @@ async function handleSubscription(request, env, reqPassword) {
     const uuid = crypto.randomUUID();
 
     const requestHost = url.hostname;
-    const subscriptionAddress = requestHost;
     let sniAndHost = requestHost;
 
+    // **IMPLEMENTASI LOGIKA WILDCARD SUBDOMAIN**
+    // Jika baseDomain diatur dan requestHost adalah subdomain dari baseDomain,
+    // maka gunakan bagian subdomain sebagai host/SNI.
+    // Contoh: 'speedtest.mydomain.com' akan menjadi 'speedtest.com'
     if (config.baseDomain && requestHost.endsWith(`.${config.baseDomain}`) && requestHost !== config.baseDomain) {
-        sniAndHost = requestHost.substring(0, requestHost.length - config.baseDomain.length - 1);
+        const subdomainPart = requestHost.substring(0, requestHost.length - config.baseDomain.length - 1);
+        // Heuristik sederhana: jika subdomain tidak mengandung titik, tambahkan '.com'
+        sniAndHost = subdomainPart.includes('.') ? subdomainPart : `${subdomainPart}.com`;
     }
 
     for (const line of selectedProxies) {
@@ -381,198 +298,44 @@ async function handleSubscription(request, env, reqPassword) {
         const country = (parts.length > 2) ? parts[2].trim() : 'XX';
         const org = (parts.length > 3) ? parts[3].trim() : 'Proxy';
 
-        const vlessConfig = `vless://${uuid}@${subscriptionAddress}:443?` +
+        const vlessConfig = `vless://${uuid}@${requestHost}:443?` +
           `type=ws&` +
           `encryption=none&` +
           `host=${sniAndHost}&` +
           `path=/${ip}-${port}&` +
           `security=tls&` +
           `sni=${sniAndHost}#` +
-          `${getFlagEmoji(country)} ${country} ${org}`;
+          `${getFlagEmoji(country)} ${country} ${org} (${sniAndHost})`;
 
         configs.push(vlessConfig);
     }
 
     let result = configs.join("\n");
-    if (format === "base64" || format === "v2ray") {
+    if (format === "base64") {
       result = btoa(result);
     }
 
     return new Response(result, {
         headers: {
             "Content-Type": "text/plain;charset=utf-8",
-            "Access-Control-Allow-Origin": "*"
         }
     });
 }
 
-
-// Handle API endpoint
-async function handleAPI(request, env) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    if (path === "/api/proxies") {
-        const proxyLines = await loadProxyList(env);
-        const proxyObjects = proxyLines.map(line => {
-            const parts = line.split(",");
-            return {
-                ip: parts[0]?.trim() || "Unknown",
-                port: parts[1]?.trim() || "Unknown",
-                country: parts[2]?.trim() || "XX",
-                org: parts[3]?.trim() || "Unknown Org"
-            };
-        });
-        return new Response(JSON.stringify(proxyObjects), {
-            headers: {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*"
-            }
-        });
-    }
-
-    if (path === "/api/countries") {
-        const proxyLines = await loadProxyList(env);
-        const countries = new Set();
-        proxyLines.forEach(line => {
-            const parts = line.split(",");
-            if (parts.length >= 3) {
-                countries.add(parts[2].trim().toUpperCase());
-            }
-        });
-        return new Response(JSON.stringify(Array.from(countries)), {
-            headers: {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*"
-            }
-        });
-    }
-
-    return new Response("Not Found", { status: 404 });
-}
-
-
-// Info page
+// Halaman Informasi
 function getInfoPage() {
     return new Response(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>V2Ray Proxy Gateway</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      min-height: 100vh;
-      padding: 20px;
-    }
-    .container {
-      max-width: 800px;
-      margin: 0 auto;
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 20px;
-      padding: 40px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-    }
-    h1 { font-size: 2.5em; margin-bottom: 10px; }
-    .status {
-      display: inline-block;
-      background: #4ade80;
-      padding: 5px 15px;
-      border-radius: 20px;
-      font-size: 0.9em;
-      margin-bottom: 30px;
-    }
-    .section {
-      background: rgba(255,255,255,0.1);
-      padding: 20px;
-      border-radius: 10px;
-      margin: 20px 0;
-    }
-    h3 { margin-bottom: 15px; color: #fbbf24; }
-    ul { list-style: none; padding-left: 0; }
-    li { padding: 8px 0; padding-left: 20px; position: relative; }
-    li:before { content: "▸"; position: absolute; left: 0; color: #4ade80; }
-    code {
-      background: rgba(0,0,0,0.3);
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-family: 'Courier New', monospace;
-      color: #fbbf24;
-    }
-    .endpoint {
-      background: rgba(0,0,0,0.2);
-      padding: 15px;
-      border-radius: 8px;
-      margin: 10px 0;
-      border-left: 4px solid #4ade80;
-    }
-    .warning {
-      background: rgba(251, 191, 36, 0.2);
-      border-left: 4px solid #fbbf24;
-      padding: 15px;
-      border-radius: 5px;
-      margin: 20px 0;
-    }
-  </style>
+  <style>body{font-family:sans-serif;background:#f0f2f5;display:flex;justify-content:center;align-items:center;min-height:100vh;}.container{background:#fff;padding:2rem;border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,0.1);max-width:600px;text-align:center;}h1{color:#1a73e8;}code{background:#e8eaed;padding:0.5rem;border-radius:4px;display:block;margin-top:1rem;word-break:break-all;}</style>
 </head>
 <body>
   <div class="container">
     <h1>🚀 V2Ray Proxy Gateway</h1>
-    <div class="status">✓ Online</div>
-    
-    <div class="section">
-      <h3>📡 WebSocket Proxy Paths</h3>
-      <ul>
-        <li><code>ws://${APP_DOMAIN}/IP-PORT</code> - Direct proxy</li>
-        <li><code>ws://${APP_DOMAIN}/ID</code> - Indonesia servers</li>
-        <li><code>ws://${APP_DOMAIN}/SG</code> - Singapore servers</li>
-        <li><code>ws://${APP_DOMAIN}/US</code> - United States servers</li>
-        <li><code>ws://${APP_DOMAIN}/ID,SG,US</code> - Random dari multiple countries</li>
-      </ul>
-    </div>
-    
-    <div class="section">
-      <h3>📥 Subscription Links</h3>
-       <div class="endpoint">
-        <strong>GET</strong> <code>/sub/${config.password}?country=ID,SG</code>
-        <p style="margin-top:10px; font-size:0.9em;">Generate subscription configs</p>
-      </div>
-    </div>
-    
-    <div class="section">
-      <h3>🔌 API Endpoints</h3>
-      <div class="endpoint">
-        <strong>GET</strong> <code>/api/proxies</code>
-        <p style="margin-top:5px; font-size:0.9em;">Get all proxy servers</p>
-      </div>
-      <div class="endpoint">
-        <strong>GET</strong> <code>/api/countries</code>
-        <p style="margin-top:5px; font-size:0.9em;">Get available countries</p>
-      </div>
-    </div>
-    
-    <div class="section">
-      <h3>⚙️ Client Config Example</h3>
-      <code style="display:block; padding:15px; line-height:1.6;">
-vless://YOUR-UUID@${APP_DOMAIN}:443/?<br>
-  type=ws&<br>
-  encryption=none&<br>
-  host=${APP_DOMAIN}&<br>
-  path=/203.194.112.119-2053&<br>
-  security=tls&<br>
-  sni=${APP_DOMAIN}
-      </code>
-    </div>
-    
-    <div class="warning">
-      ⚠️ <strong>Important:</strong> This service is for personal use only. 
-      Please respect bandwidth limits and use responsibly.
-    </div>
+    <p>Worker Anda sedang berjalan. Gunakan link subskripsi yang benar untuk mendapatkan konfigurasi.</p>
+    <code>https://{worker_domain}/sub/{password}?country=US</code>
   </div>
 </body>
 </html>`, {
@@ -580,7 +343,7 @@ vless://YOUR-UUID@${APP_DOMAIN}:443/?<br>
     });
 }
 
-// Utility functions
+// Fungsi utilitas
 function shuffleArray(array) {
     for (let i = array.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -589,30 +352,10 @@ function shuffleArray(array) {
 }
 
 function getFlagEmoji(countryCode) {
+    if (!countryCode || countryCode.length !== 2) return '🌐';
     const codePoints = countryCode
         .toUpperCase()
         .split("")
         .map(char => 127397 + char.charCodeAt(0));
     return String.fromCodePoint(...codePoints);
 }
-
-/*
-================================================================================
-PANDUAN SETUP LENGKAP (disederhanakan)
-================================================================================
-
-UNTUK PANDUAN LENGKAP, SILAKAN LIHAT FILE `README.md` DI REPOSITORY.
-
-LANGKAH DASAR:
-1.  Salin seluruh kode ini ke dalam editor Cloudflare Worker.
-2.  Sesuaikan objek `config` di bagian paling atas skrip.
-    -   `proxyListUrl`: Pastikan URL ini benar.
-    -   `password`: Ganti dengan kata sandi unik Anda.
-    -   `baseDomain`: Atur ke domain worker Anda (wajib untuk fitur wildcard).
-    -   `kvNamespace`: Beri nama untuk KV Namespace Anda.
-3.  Buat KV Namespace di Cloudflare dengan nama yang sama persis seperti di `kvNamespace`.
-4.  Ikat (bind) KV Namespace tersebut ke Worker ini melalui menu Settings > Variables.
-5.  Simpan dan Deploy.
-
-================================================================================
-*/
