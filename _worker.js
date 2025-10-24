@@ -1,26 +1,34 @@
 import { connect } from "cloudflare:sockets";
 
-// ========================================
-// KONFIGURASI - EDIT SESUAI KEBUTUHAN
-// ========================================
+// =================================================================
+// KONFIGURASI - EDIT SESUAI KEBUTUHAN ANDA
+// =================================================================
+const config = {
+  // DOMAIN DASAR UNTUK FITUR WILDCARD (BIARKAN KOSONG JIKA TIDAK DIGUNAKAN)
+  // Contoh: "kangfurqon.my.id"
+  // Jika diisi, maka permintaan ke "sub.domain.com.kangfurqon.my.id"
+  // akan menggunakan "sub.domain.com" sebagai SNI/Host.
+  baseDomain: "",
 
-// URL untuk list proxy Anda
-const PRX_BANK_URL = "https://raw.githubusercontent.com/mrzero0nol/My-v2ray/refs/heads/main/proxyList.txt";
-const KV_PRX_URL = "https://raw.githubusercontent.com/mrzero0nol/My-v2ray/refs/heads/main/KvProxyList.json";
+  // URL RAW dari file proxyList.txt di repository GitHub Anda
+  proxyListUrl: "https://raw.githubusercontent.com/mrzero0nol/My-v2ray/refs/heads/main/proxyList.txt",
 
-// DNS Server untuk UDP
-const DNS_SERVER = "8.8.8.8";
-const DNS_PORT = 53;
+  // URL RAW dari file KvProxyList.json di repository GitHub Anda
+  kvProxyListUrl: "https://raw.githubusercontent.com/mrzero0nol/My-v2ray/refs/heads/main/KvProxyList.json",
 
-// Relay server untuk UDP (optional)
-const UDP_RELAY = {
-  host: "udp-relay.hobihaus.space",
-  port: 7300,
+  // Alamat server DNS yang akan digunakan untuk permintaan UDP
+  dnsServer: "8.8.8.8",
+  dnsPort: 53,
+
+  // Konfigurasi server relay UDP (opsional, biarkan jika tidak yakin)
+  udpRelay: {
+    host: "udp-relay.hobihaus.space",
+    port: 7300,
+  },
 };
-
-// ========================================
-// JANGAN EDIT DI BAWAH INI
-// ========================================
+// =================================================================
+// JANGAN EDIT DI BAWAH BAGIAN INI
+// =================================================================
 
 let APP_DOMAIN = "";
 let prxIP = "";
@@ -31,7 +39,7 @@ const WS_READY_STATE_OPEN = 1;
 const WS_READY_STATE_CLOSING = 2;
 
 // Load proxy list dari GitHub
-async function loadProxyList(url = PRX_BANK_URL) {
+async function loadProxyList(url = config.proxyListUrl) {
   try {
     const response = await fetch(url);
     if (response.status !== 200) return [];
@@ -57,7 +65,7 @@ async function loadProxyList(url = PRX_BANK_URL) {
 }
 
 // Load KV proxy list
-async function loadKVProxyList(url = KV_PRX_URL) {
+async function loadKVProxyList(url = config.kvProxyListUrl) {
   try {
     const response = await fetch(url);
     if (response.status !== 200) return {};
@@ -167,7 +175,7 @@ async function handleWebSocket(request) {
     new WritableStream({
       async write(chunk) {
         if (isDNS) {
-          return await handleUDP(DNS_SERVER, DNS_PORT, chunk, webSocket, log);
+          return await handleUDP(config.dnsServer, config.dnsPort, chunk, webSocket, log);
         }
         
         if (remoteSocketWrapper.value) {
@@ -256,8 +264,8 @@ async function handleTCP(remoteSocket, address, port, data, webSocket, log) {
 async function handleUDP(address, port, data, webSocket, log) {
   try {
     const tcpSocket = connect({
-      hostname: UDP_RELAY.host,
-      port: UDP_RELAY.port
+      hostname: config.udpRelay.host,
+      port: config.udpRelay.port
     });
     
     const header = `udp:${address}:${port}`;
@@ -368,15 +376,26 @@ async function handleSubscription(url) {
   const configs = [];
   const uuid = crypto.randomUUID();
   
+  // Logika untuk domain wildcard
+  let subscriptionAddress = APP_DOMAIN;
+  let subscriptionHost = APP_DOMAIN;
+
+  // Cek apakah baseDomain diatur dan domain saat ini adalah subdomain darinya
+  if (config.baseDomain && APP_DOMAIN.endsWith(`.${config.baseDomain}`)) {
+    // Ekstrak bagian wildcard untuk digunakan sebagai host/sni
+    // Contoh: dari "ava.game.naver.com.kangfurqon.my.id" menjadi "ava.game.naver.com"
+    subscriptionHost = APP_DOMAIN.slice(0, APP_DOMAIN.length - config.baseDomain.length - 1);
+  }
+
   for (const proxy of filteredList) {
     // Generate VLESS config
-    const config = `vless://${uuid}@${APP_DOMAIN}:443?` +
+    const config = `vless://${uuid}@${subscriptionAddress}:443?` +
       `type=ws&` +
       `encryption=none&` +
-      `host=${APP_DOMAIN}&` +
+      `host=${subscriptionHost}&` +
       `path=/${proxy.ip}-${proxy.port}&` +
       `security=tls&` +
-      `sni=${APP_DOMAIN}#` +
+      `sni=${subscriptionHost}#` +
       `${getFlagEmoji(proxy.country)} ${proxy.country} ${proxy.org}`;
     
     configs.push(config);
@@ -540,7 +559,7 @@ function getInfoPage() {
     <div class="section">
       <h3>⚙️ Client Config Example</h3>
       <code style="display:block; padding:15px; line-height:1.6;">
-vless://YOUR-UUID@ava.game.naver.com:443/?<br>
+vless://YOUR-UUID@${APP_DOMAIN}:443/?<br>
   type=ws&<br>
   encryption=none&<br>
   host=${APP_DOMAIN}&<br>
@@ -577,43 +596,41 @@ function getFlagEmoji(countryCode) {
   return String.fromCodePoint(...codePoints);
 }
 
-/* 
+/*
 ================================================================================
 PANDUAN SETUP LENGKAP
 ================================================================================
 
 STEP 1: UPLOAD FILE KE GITHUB
 ------------------------------
-1. Buat repository GitHub (public)
-2. Upload 2 file:
-   - proxyList.txt (file yang Anda berikan)
-   - kvProxyList.json (file yang Anda berikan)
-
-3. Get raw URL:
-   https://raw.githubusercontent.com/USERNAME/REPO/main/proxyList.txt
-   https://raw.githubusercontent.com/USERNAME/REPO/main/kvProxyList.json
+1. Buat repository GitHub (public).
+2. Upload 2 file: `proxyList.txt` dan `KvProxyList.json`.
+3. Dapatkan URL raw untuk kedua file tersebut. Contoh:
+   - https://raw.githubusercontent.com/USERNAME/REPO/main/proxyList.txt
+   - https://raw.githubusercontent.com/USERNAME/REPO/main/KvProxyList.json
 
 
-STEP 2: EDIT KONFIGURASI
--------------------------
-Ganti di bagian atas script:
-
-const PRX_BANK_URL = "https://raw.githubusercontent.com/YOUR-USERNAME/YOUR-REPO/main/proxyList.txt";
-const KV_PRX_URL = "https://raw.githubusercontent.com/YOUR-USERNAME/YOUR-REPO/main/kvProxyList.json";
+STEP 2: EDIT KONFIGURASI DI ATAS
+---------------------------------
+Edit objek `config` di bagian paling atas skrip ini.
+- `baseDomain`: Isi jika Anda ingin menggunakan fitur wildcard/bug host.
+- `proxyListUrl`: Ganti dengan URL raw `proxyList.txt` Anda.
+- `kvProxyListUrl`: Ganti dengan URL raw `KvProxyList.json` Anda.
 
 
 STEP 3: DEPLOY KE CLOUDFLARE WORKERS
 ------------------------------------
-1. Login https://dash.cloudflare.com
-2. Workers & Pages → Create Worker
-3. Copy script ini → Paste
-4. Deploy
+1. Login ke dasbor Cloudflare.
+2. Buka Workers & Pages → Create Worker.
+3. Salin seluruh isi skrip ini dan tempel ke editor.
+4. Deploy.
 
 
-STEP 4: BIND CUSTOM DOMAIN (Optional)
---------------------------------------
-Workers → Settings → Triggers → Add Custom Domain
-Contoh: vpn.yourdomain.com
+STEP 4: BIND CUSTOM DOMAIN (WAJIB)
+-----------------------------------
+- Buka Worker → Settings → Triggers → Add Custom Domain.
+- Arahkan domain atau subdomain Anda ke worker ini. Contoh: `vpn.yourdomain.com`.
+- Untuk fitur wildcard, Anda perlu membuat DNS record wildcard (*.yourdomain.com) yang menunjuk ke Worker.
 
 
 CARA PAKAI
@@ -621,85 +638,75 @@ CARA PAKAI
 
 MODE 1: Country Code (Recommended)
 -----------------------------------
-Path: /ID → Random server Indonesia
-Path: /SG → Random server Singapore  
-Path: /US → Random server Amerika
-Path: /ID,SG → Random dari ID atau SG
+Gunakan path untuk memilih negara secara acak.
+- Path: `/ID` → Server acak dari Indonesia.
+- Path: `/SG` → Server acak dari Singapura.
+- Path: `/ID,SG` → Server acak dari Indonesia atau Singapura.
 
-Config client:
-vless://UUID@ava.game.naver.com:443/
-  ?type=ws
-  &host=vpn.yourdomain.com
-  &path=/ID
-  &security=tls
-  &sni=vpn.yourdomain.com
+Contoh di klien V2Ray:
+- address: vpn.yourdomain.com
+- path: /ID
 
 
 MODE 2: Direct IP:PORT
 -----------------------
-Path: /203.194.112.119-2053
+Gunakan path untuk menunjuk proxy spesifik.
+- Path: `/203.194.112.119-2053`
 
-Config client:
-vless://UUID@ava.game.naver.com:443/
-  ?type=ws
-  &host=vpn.yourdomain.com
-  &path=/203.194.112.119-2053
-  &security=tls
-  &sni=vpn.yourdomain.com
+Contoh di klien V2Ray:
+- address: vpn.yourdomain.com
+- path: /203.194.112.119-2053
 
 
 MODE 3: Subscription Link
 --------------------------
-URL: https://vpn.yourdomain.com/sub?cc=ID,SG&limit=50&format=v2ray
+Gunakan URL ini untuk mengimpor semua konfigurasi ke klien Anda.
+- URL: `https://vpn.yourdomain.com/sub?cc=ID,SG&limit=50`
 
-Import ke V2RayNG/V2RayN/Clash
+
+MODE 4: Wildcard / Bug Host (Domain Fronting)
+-----------------------------------------------
+Fitur ini memungkinkan Anda menyamarkan lalu lintas dengan menggunakan domain lain sebagai SNI/Host.
+
+Setup:
+1. Pastikan Anda memiliki DNS wildcard (*.yourdomain.com) yang menunjuk ke Worker Anda.
+2. Atur `baseDomain` di dalam objek `config` di atas. Contoh: `baseDomain: "kangfurqon.my.id"`.
+
+Cara Penggunaan:
+- Buka URL langganan menggunakan domain yang telah digabungkan.
+  Contoh: `https://ava.game.naver.com.kangfurqon.my.id/sub?cc=ID`
+- Skrip akan secara otomatis menghasilkan konfigurasi dimana alamatnya adalah `ava.game.naver.com.kangfurqon.my.id`, tetapi SNI/Host-nya adalah `ava.game.naver.com`.
 
 
 API USAGE
 =========
-
-Get All Proxies:
-GET https://vpn.yourdomain.com/api/proxies
-
-Get Countries:
-GET https://vpn.yourdomain.com/api/countries
+- Get All Proxies: `GET https://vpn.yourdomain.com/api/proxies`
+- Get Countries: `GET https://vpn.yourdomain.com/api/countries`
 
 
 FITUR SCRIPT INI
 ================
-✓ Support 2000+ proxy dari proxyList.txt
-✓ Country-based routing (kvProxyList.json)
-✓ Auto-generate subscription configs
-✓ Support VLESS, VMess, Trojan, Shadowsocks
-✓ WebSocket over TLS
-✓ Bug host SNI support
-✓ UDP relay untuk DNS
-✓ API endpoints
-✓ Auto-failover
+✓ Support ribuan proxy dari `proxyList.txt`.
+✓ Routing berdasarkan negara.
+✓ Auto-generate subscription configs.
+✓ Support VLESS WebSocket over TLS.
+✓ Wildcard domain untuk Bug Host / Domain Fronting.
+✓ UDP relay untuk DNS.
+✓ API endpoints.
 
 
 TROUBLESHOOTING
 ===============
-
-❌ "No proxy available"
-→ GitHub file tidak bisa diakses
-→ Check URL PRX_BANK_URL dan KV_PRX_URL
-
-❌ "Country not found"  
-→ Country code tidak ada di kvProxyList.json
-→ Check available countries: /api/countries
-
-❌ Connection timeout
-→ Server proxy down atau unreachable
-→ Coba country lain atau path lain
+- "No proxy available": Pastikan URL di `config.proxyListUrl` dan `config.kvProxyListUrl` bisa diakses.
+- "Country not found": Kode negara tidak ada di `kvProxyList.json`. Cek negara yang tersedia via `/api/countries`.
+- Connection timeout: Server proxy tujuan sedang mati. Coba negara atau proxy lain.
 
 
 KEAMANAN
 ========
-⚠️ Personal use only
-⚠️ Jangan share GitHub repo URL ke public
-⚠️ Rotate UUID secara berkala
-⚠️ Monitor usage di Cloudflare dashboard
+⚠️ Gunakan untuk keperluan pribadi saja.
+⚠️ Jangan bagikan URL repository GitHub Anda ke publik.
+⚠️ Pantau penggunaan di dasbor Cloudflare Anda.
 
 ================================================================================
 */
